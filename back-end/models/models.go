@@ -35,7 +35,7 @@ type FileModel struct {
 	User   UserModel `gorm:"foreignKey:UserID"`
 
 	Filename    string `gorm:"not null"`
-	ContentType string `gorm:"not null"` // .docx, .pdf, .txt, etc.
+	ContentType string `gorm:"not null"` // application/pdf, image/png, etc.
 	S3Key       string `gorm:"uniqueIndex;not null"`
 	Size        int64  `gorm:"not null"`
 

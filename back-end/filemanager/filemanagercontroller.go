@@ -3,8 +3,11 @@ package filemanager
 import (
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 
 	"back-end/auth"
+	"back-end/queue"
 	"back-end/utils"
 
 	"github.com/gin-gonic/gin"
@@ -15,10 +18,11 @@ import (
 type fileManagerHandler struct {
 	db          *gorm.DB
 	minioClient *minio.Client
+	publisher   *queue.Enqueuer
 }
 
-func createFileManagerHandler(db *gorm.DB, minioClient *minio.Client) *fileManagerHandler {
-	return &fileManagerHandler{db: db, minioClient: minioClient}
+func createFileManagerHandler(db *gorm.DB, minioClient *minio.Client, publisher *queue.Enqueuer) *fileManagerHandler {
+	return &fileManagerHandler{db: db, minioClient: minioClient, publisher: publisher}
 }
 
 func (h *fileManagerHandler) uploadFile(c *gin.Context) {
@@ -42,7 +46,7 @@ func (h *fileManagerHandler) uploadFile(c *gin.Context) {
 		return
 	}
 
-	result, err := HandleUpload(h.db, h.minioClient, userID, fileHeader)
+	result, err := HandleUpload(h.db, h.minioClient, h.publisher, userID, fileHeader)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "No fue posible subir el archivo"})
 		return
@@ -75,7 +79,7 @@ func (h *fileManagerHandler) viewAllFilesUploadedByUser(c *gin.Context) {
 
 func (h *fileManagerHandler) downloadFile(c *gin.Context) {
 	/*
-		Maneja la descarga de un archivo desde MinIO.
+		Maneja la descarga de un archivo desde MinIO a partir de su clave S3.
 		Verifica que el usuario esté autenticado, obtiene la clave S3 del archivo
 		y llama a la función DownloadFile para obtener el archivo desde MinIO.
 	*/
@@ -85,6 +89,82 @@ func (h *fileManagerHandler) downloadFile(c *gin.Context) {
 		return
 	}
 
+	h.streamObject(c, s3Key, s3Key, "")
+}
+
+func (h *fileManagerHandler) downloadOriginalFile(c *gin.Context) {
+	/*
+		Maneja la descarga del archivo original de un usuario a partir del ID
+		del archivo, verificando que le pertenezca al usuario autenticado.
+	*/
+	userID, err := auth.GetUserID(c.GetString("username"), h.db)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Usuario no encontrado"})
+		return
+	}
+
+	fileID, err := parseFileID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Se requiere un ID de archivo válido"})
+		return
+	}
+
+	file, err := FindFileOwnedByUser(h.db, userID, fileID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No fue posible encontrar el archivo"})
+		return
+	}
+
+	h.streamObject(c, file.S3Key, file.Filename, file.ContentType)
+}
+
+func (h *fileManagerHandler) downloadArtifactFile(c *gin.Context) {
+	/*
+		Maneja la descarga del artefacto generado a partir del archivo de un
+		usuario, buscándolo por el ID del archivo y verificando que le
+		pertenezca al usuario autenticado.
+	*/
+	userID, err := auth.GetUserID(c.GetString("username"), h.db)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Usuario no encontrado"})
+		return
+	}
+
+	fileID, err := parseFileID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Se requiere un ID de archivo válido"})
+		return
+	}
+
+	file, err := FindFileOwnedByUser(h.db, userID, fileID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No fue posible encontrar el archivo"})
+		return
+	}
+
+	artifact := file.Conversion.Artifact
+	if artifact == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "La conversión aún no ha generado un artefacto"})
+		return
+	}
+
+	h.streamObject(c, artifact.S3Key, artifact.Filename, artifact.ContentType)
+}
+
+// parseFileID convierte el parámetro :fileId de la ruta a un uint.
+func parseFileID(c *gin.Context) (uint, error) {
+	fileID, err := strconv.ParseUint(c.Param("fileId"), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return uint(fileID), nil
+}
+
+func (h *fileManagerHandler) streamObject(c *gin.Context, s3Key string, filename string, contentType string) {
+	/*
+		streamObject descarga un archivo desde MinIO y lo envía como respuesta HTTP.
+		Recibe la clave S3 del archivo, el nombre del archivo y el tipo de contenido.
+	*/
 	file, err := DownloadFile(h.minioClient, utils.BucketName(), s3Key)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "No fue posible descargar el archivo"})
@@ -92,25 +172,30 @@ func (h *fileManagerHandler) downloadFile(c *gin.Context) {
 	}
 	defer file.Close()
 
-	c.Header("Content-Disposition", "attachment; filename="+s3Key)
-	c.Header("Content-Type", "application/octet-stream")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	c.Header("Content-Disposition", "attachment; filename="+url.PathEscape(filename))
+	c.Header("Content-Type", contentType)
 	c.Stream(func(w io.Writer) bool {
 		io.Copy(w, file)
 		return false
 	})
 }
 
-func SetupFileManagerRoutes(router *gin.Engine, db *gorm.DB, minioClient *minio.Client) {
+func SetupFileManagerRoutes(router *gin.Engine, db *gorm.DB, minioClient *minio.Client, publisher *queue.Enqueuer) {
 	/*
 		Configura las rutas de manejo de archivos en el enrutador Gin.
 		Todas las rutas requieren autenticación.
 	*/
-	handler := createFileManagerHandler(db, minioClient)
+	handler := createFileManagerHandler(db, minioClient, publisher)
 
 	filesGroup := router.Group("/files")
 	{
 		filesGroup.POST("/upload", auth.RequireAuth(db), handler.uploadFile)
 		filesGroup.GET("/uploaded", auth.RequireAuth(db), handler.viewAllFilesUploadedByUser)
 		filesGroup.GET("/download/:s3Key", auth.RequireAuth(db), handler.downloadFile)
+		filesGroup.GET("/:fileId/original", auth.RequireAuth(db), handler.downloadOriginalFile)
+		filesGroup.GET("/:fileId/artifact", auth.RequireAuth(db), handler.downloadArtifactFile)
 	}
 }

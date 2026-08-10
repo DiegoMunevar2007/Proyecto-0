@@ -6,9 +6,12 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
 	github.com/minio/minio-go/v7 v7.2.1
+	github.com/rabbitmq/amqp091-go v1.12.0
+	github.com/wagslane/go-rabbitmq v0.16.1
 	golang.org/x/crypto v0.54.0
 	gorm.io/driver/postgres v1.6.2
 	gorm.io/gorm v1.31.2
+	resty.dev/v3 v3.0.0-rc.3
 )
 
 require (
@@ -61,5 +64,3 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
 )
-
-replace back-end => /home/diegocrea/Proyecto-0/back-end
