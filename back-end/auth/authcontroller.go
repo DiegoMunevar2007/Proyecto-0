@@ -14,11 +14,10 @@ func SetupAuthRoutes(router *gin.Engine, db *gorm.DB) {
 	{
 		authGroup.POST("/register", func(c *gin.Context) {
 			var request struct {
-				Username string `json:"username"`
-				Password string `json:"password"`
+				Username string `form:"username"`
+				Password string `form:"password"`
 			}
-			//
-			if err := c.ShouldBindJSON(&request); err != nil {
+			if err := c.ShouldBind(&request); err != nil {
 				c.JSON(400, gin.H{"error": "Solicitud inválida"})
 				return
 			}
@@ -28,10 +27,10 @@ func SetupAuthRoutes(router *gin.Engine, db *gorm.DB) {
 
 		authGroup.POST("/login", func(c *gin.Context) {
 			var request struct {
-				Username string `json:"username"`
-				Password string `json:"password"`
+				Username string `form:"username"`
+				Password string `form:"password"`
 			}
-			if err := c.ShouldBindJSON(&request); err != nil {
+			if err := c.ShouldBind(&request); err != nil {
 				c.JSON(400, gin.H{"error": "Solicitud inválida"})
 				return
 			}

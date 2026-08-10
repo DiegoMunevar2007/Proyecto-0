@@ -28,6 +28,10 @@ func main() {
 		log.Fatalf("No fue posible conectarse a la base de datos: %v", err)
 	}
 
+	// Migrar el esquema de forma idempotente por si el worker arranca antes
+	// que la API (que también ejecuta la migración).
+	db.AutoMigrate(&models.UserModel{}, &models.FileModel{}, &models.ArtifactModel{}, &models.ConversionModel{})
+
 	// Verificar que los modelos compartidos funcionan.
 	var conversionCount int64
 	if err := db.Model(&models.ConversionModel{}).Count(&conversionCount).Error; err != nil {
